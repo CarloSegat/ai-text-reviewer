@@ -27,6 +27,17 @@ WORK = BASE.replace("Omega", PARA + "\n\nOmega")   # 1 inserted paragraph: 1 pas
 BASE3 = BASE + "\nRevoked credentials are stored.\n\nEvery verifier checks them.\n\nThe end is near.\n"
 WORK3 = BASE3.replace("are stored.", "are stored in the registry.").replace("checks them.", "checks them twice.") \
     .replace("is near.", "is here.")
+# A sentence a comment rewrote in 4 changes, then a later edit rewrote the last one again
+# (the live review's bearer-token sentence).
+TOKEN = BASE.replace("Omega", "A bearer token is exact, its enrolled set the holders of the nonce, "
+                     "a leaked nonce a trust assumption rather than a false positive rate.\n\nOmega")
+TOKEN_A = TOKEN.replace("exact, its enrolled set the holders of the nonce, a leaked nonce a trust assumption "
+                        "rather than a false positive rate.",
+                        "exact: it enrolls whoever holds the nonce, so a leaked nonce breaks a trust assumption instead "
+                        "of adding false positives.\nThat assumption fails on a public ledger, where the first "
+                        "presentation of a token reveals its nonce.")
+TOKEN_B = TOKEN_A.replace("That assumption fails on a public ledger, where the first presentation of a token reveals its nonce.",
+                          "Every presentation shows the nonce to whoever reads the ledger.")
 # The page's first fetch matching `match` (JS on u, o) waits for window.__go(); window.__held once it waits.
 HOLD = """(() => { const f = window.fetch; let once = true; window.fetch = async (u, o) => {
   const res = await f(u, o);
@@ -286,6 +297,16 @@ class PageTest(unittest.TestCase):
         self.assertEqual(sorted(self.types(n)), ["approve"] * 3 + ["approve_text"] + ["commit"] * 3)
         self.assertEqual([e["text"] for e in self.log() if e["type"] == "approve_text"], [PARA + "\n\n"])
         self.assertEqual(self.git("show", "HEAD:doc.tex"), WORK)
+
+    def test_approve_edit_takes_the_changes_a_later_edit_rewrote(self):
+        p = self.start(TOKEN, TOKEN_A)
+        self.write(TOKEN_B)
+        until(lambda: self.types(0) == ["edit", "edit"] and p.js("cards[0].hs.length") == 5)
+        p.js("document.querySelector('.card .hunk').click()")
+        self.assertEqual(p.js("$('#hmenu [data-h=approve_edit]').textContent"), "Approve edit (5)")
+        p.js("$('#hmenu [data-h=approve_edit]').click()")
+        self.assertEqual(self.committed(2), ["approve_text", "approve", "commit"])
+        self.assertEqual(self.git("show", "HEAD:doc.tex"), TOKEN_B)
 
     def test_withdrawing_a_split_part(self):
         p = self.start()

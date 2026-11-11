@@ -502,6 +502,17 @@ class Approvals(Case):
         e2 = [e for e in rv.log() if e["type"] == "edit"][-1]
         self.assertEqual([p["edits"] for p in self.changed(rv)], [[e["id"]]] * 3 + [[e2["id"]]])
 
+    def test_restart_keeps_each_hunks_edit(self):
+        rv = self.make("Alpha one.\n\nBeta two.\n", "Alpha ONE.\n\nBeta two.\n")
+        rv.doc()
+        (rv.repo / "f.tex").write_text("Alpha ONE.\n\nBeta TWO.\n")
+        rv.doc()
+        a, b = [e["id"] for e in rv.log() if e["type"] == "edit"]
+        rv = review.Review(rv.repo, "base", ["f.tex"])   # the server restarts
+        rv.doc()
+        self.assertEqual([e["type"] for e in rv.log()], ["edit", "edit"])
+        self.assertEqual([p["edits"] for p in self.changed(rv)], [[a], [b]])
+
 
 class Server(Case):
     def request(self, rv, close):

@@ -501,11 +501,30 @@ def view(path, base, head, work, splits=(), records=(), edits=None):
 
 def unit_hunks(path, base, work, splits=(), records=()):
     """The hunks, as (old, new), of the changed passages of the diff from base
-    to work, each against its approved text, before the splits cut them."""
+    to work, each against its approved text, before the splits cut them:
+    {hunk: [(start, end) in work of each part of it]}."""
     ps = [p for p in passages(path, base, work) if p["kind"] == "changed"]
     cmap = cuts(ps, splits)
     approvals(ps, records, cmap)
-    return {tuple(h) for p in split(path, ps, cmap) for h in p["whole"]}
+    out = {}
+    for p in split(path, ps, cmap):
+        for (s, e, *_), h in zip(hunks(p["segs"]), p["whole"]):
+            out.setdefault(tuple(h), []).append((p["at"] + s, p["at"] + e))
+    return out
+
+
+def follow(a, b):
+    """Where a span of text a is in text b, by a line diff of the two: a
+    function of (start, end) in a. A place in lines the diff keeps moves with
+    them; one in lines it replaces goes to the edge of the lines replacing them."""
+    la, lb = a.splitlines(True), b.splitlines(True)
+    blocks, x, y = [], 0, 0
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, la, lb, autojunk=False).get_opcodes():
+        dx, dy = sum(map(len, la[i1:i2])), sum(map(len, lb[j1:j2]))
+        blocks.append((op == "equal", x, x + dx, y, y + dy))
+        x, y = x + dx, y + dy
+    return lambda s, e: (min(y0 + s - x0 if same else y0 for same, x0, x1, y0, _ in blocks if x0 <= s <= x1),
+                         max(y0 + e - x0 if same else y1 for same, x0, x1, y0, y1 in blocks if x0 <= e <= x1))
 
 
 def approve_texts(shown, pick, texts):
@@ -621,7 +640,8 @@ class Review:
     def state(self, path):
         """The log's splits of a file, its approve_text records in force (an entry
         replaces the one it names; one back to the base text approves nothing)
-        and its edits, {(old, new): the latest edit with that hunk}."""
+        and its edits, {(old, new): the latest edit with that hunk, or the edit
+        it "stays" with}."""
         splits, records, edits = [], {}, {}
         for e in self.log():
             if e.get("file") != path:
@@ -634,6 +654,7 @@ class Review:
                     records[e["id"]] = e
             elif e["type"] == "edit":
                 edits.update({(o, n): e["id"] for o, n in e["hunks"]})
+                edits.update({(o, n): k for k, hs in e.get("stays", {}).items() for o, n in hs})
         return splits, list(records.values()), edits
 
     def view(self, path, head="HEAD"):
@@ -648,22 +669,33 @@ class Review:
     def track(self):
         """Log the hunks each change to a reviewed file introduced, as one edit the
         page can approve in one click: those the page shows now (against the
-        approved texts, before splits) and did not show for the text before.
-        Before the first look, the file is taken as it was at HEAD, so the
-        uncommitted changes form the first edit."""
+        approved texts, before splits) and did not show for the text before. A
+        new hunk where a hunk the change rewrote was stays with that hunk's
+        edit ("stays": {edit: hunks}), so Approve edit still takes it. Before
+        the first look, the file is taken as it was at HEAD, so the uncommitted
+        changes no edit holds yet form the first edit."""
         with self.track_lock:
             for path in self.files:
-                text = self.text(path)
-                if path not in self.seen:
+                text, first = self.text(path), path not in self.seen
+                if first:
                     head = git(self.repo, "show", f"HEAD:{path}")
                     self.seen[path] = head.stdout if head.returncode == 0 else ""
-                if self.seen[path] == text:
+                was = self.seen[path]
+                if was == text:
                     continue
-                splits, records, _ = self.state(path)
-                new = unit_hunks(path, self.old_text(path), text, splits, records) - \
-                    unit_hunks(path, self.old_text(path), self.seen[path], splits, records)
+                splits, records, edits = self.state(path)
+                now, before = (unit_hunks(path, self.old_text(path), t, splits, records) for t in (text, was))
+                new = {h: at for h, at in now.items() if h not in before and not (first and h in edits)}
+                where = follow(was, text)
+                gone = sorted(([where(*s) for s in at], edits[h]) for h, at in before.items() if h not in now and h in edits)
+                stays = {}
+                for h, at in new.items():
+                    k = next((k for spans, k in gone if any(a <= e and s <= b for a, b in spans for s, e in at)), None)
+                    if k:
+                        stays.setdefault(k, []).append(list(h))
                 if new:
-                    self.append({"type": "edit", "file": path, "hunks": sorted(map(list, new))})
+                    self.append({"type": "edit", "file": path, "hunks": sorted(map(list, new)),
+                                 **({"stays": stays} if stays else {})})
                 self.seen[path] = text
 
     def approve(self, body):
