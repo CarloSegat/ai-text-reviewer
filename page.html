@@ -44,6 +44,8 @@ nav a .gist { color: var(--muted); overflow: hidden; text-overflow: ellipsis; wh
 .dot.open { background: var(--warn); border-color: var(--warn); }
 .dot.added { background: var(--added); border-color: var(--added); }
 .card.added { border: 1px dashed var(--added); }
+.parent-heading { font: 600 18px/1.4 var(--read); margin: 18px 0 -4px; }
+.parent-heading span { font: 400 12px var(--ui); color: var(--muted); margin-left: 8px; }
 .strip { display: flex; gap: 10px; justify-content: center; align-items: center; color: var(--muted); font-size: 12px; margin: 6px 0; }
 .strip button { font-size: 12px; }
 .head .x { border: 0; background: none; color: var(--muted); padding: 0 2px; }
@@ -225,6 +227,9 @@ function renderDoc() {
       }
       const p = ps[j++];
       cards.push(p);
+      // The file's first paragraph: the heading the including file gives right before it.
+      const hd = j === 1 && f.heading;
+      if (hd) sec.append(el("div", { class: "parent-heading" }, "§ ", tex(hd.title), el("span", {}, `${hd.file.split("/").pop()}:${hd.line}`)));
       // Each run of changes is a hunk, numbered as review.py's hunks() numbers it. The
       // segments are the diff from the passage's approved text: every hunk is pending.
       const text = el("div", { class: "text" });
@@ -249,7 +254,7 @@ function renderDoc() {
       card.passage = p;
       sec.append(card);
     }
-    if (sec.querySelector(".card")) main.append(sec);
+    if (ps.length) main.append(sec);   // a file without cards still offers its paragraphs
   }
   renderState();
 }
@@ -258,7 +263,8 @@ function renderDoc() {
 const visible = p => S.view[p.id] ?? p.kind === "changed";
 const view = (ps, show) => post({ type: "view", passages: ps.map(p => p.id), show }).then(() => loadDoc(true));
 
-// A gap's + strip: the 2 paragraphs after the card above it, or before the card below it, become cards.
+// A gap's + strip: its first 2 paragraphs (after the card above, or the file's start) or its
+// last 2 (before the card below, or the file's end, where the next file goes on) become cards.
 function strip(gap, above, below) {
   const s = el("div", { class: "strip" });
   const plus = (ps, label, title) => {
@@ -267,9 +273,9 @@ function strip(gap, above, below) {
     return b;
   };
   if (gap.length <= 2) return s.append(plus(gap, `＋ ${gap.length}`, `Show ${gap.length > 1 ? "these 2 paragraphs" : "this paragraph"} as cards`)), s;
-  if (above) s.append(plus(gap.slice(0, 2), "＋ 2 ↓", "Show the 2 paragraphs after the card above"));
-  s.append(`${gap.length} paragraphs`);
-  if (below) s.append(plus(gap.slice(-2), "＋ 2 ↑", "Show the 2 paragraphs before the card below"));
+  s.append(plus(gap.slice(0, 2), "＋ 2 ↓", above ? "Show the 2 paragraphs after the card above" : "Show the file's first 2 paragraphs"),
+    `${gap.length} paragraphs${above && below ? "" : above ? " to the end of the file" : below ? " from the start of the file" : ""}`,
+    plus(gap.slice(-2), "＋ 2 ↑", below ? "Show the 2 paragraphs before the card below" : "Show the file's last 2 paragraphs"));
   return s;
 }
 

@@ -26,6 +26,9 @@ Do what the comment asks, editing the files, under the rules of this repository'
 Then answer in 1 to 3 sentences: the changed sentence quoted in full, or your question. Nothing else."""
 MESSAGE_PROMPT = """Write the git commit message for the staged change (read it with git diff --cached), following the commit rules of this repository's CLAUDE.md files. The edits were made during a review and approved by the author. Output the message only."""
 MESSAGE = re.compile(r"(feat|fix|test|docs|refactor|tools)\([^()\n]+\)\n\n[^\n]+\n\n\S[\s\S]*")
+INPUT = re.compile(r"^[^%\n]*\\(?:input|include)\{[^{}]*\}", re.M)
+HEADING = re.compile(r"(?m)^[ \t]*\\(part|chapter|section|subsection|subsubsection|paragraph)\*?(?:\[[^\]\n]*\])?"
+                     r"\{((?:[^{}\n]|\{[^{}\n]*\})*)\}")
 PAGE_TYPES = {"comment", "dismiss", "split", "delete", "view"}
 # A reference, label, environment or inline math is one token, so a diff never
 # splits it and the page can render it.
@@ -592,7 +595,27 @@ class Review:
 
     def doc(self):
         self.track()
-        return {"files": [{"path": p, "passages": self.shown(p)} for p in self.files]}
+        return {"files": [{"path": p, "passages": self.shown(p), "heading": self.heading(p)} for p in self.files]}
+
+    def heading(self, path):
+        """The sectioning command a .tex file of the repo gives right before its
+        \\input or \\include of path, after any earlier one, as {file, line, kind,
+        title}, or None: what the reader sees right before path's first line."""
+        stem = re.escape(Path(path).with_suffix("").name)
+        use = re.compile(INPUT.pattern.replace("[^{}]*", r"(?:[^{}]*/)?" + stem + r"(?:\.tex)?"), re.M)
+        tex = git(self.repo, "ls-files", "-co", "--exclude-standard", "--", "*.tex").stdout.splitlines()
+        for f in (f for f in tex if f != path):
+            try:
+                text = (self.repo / f).read_text(errors="replace")
+            except OSError:
+                continue
+            m = use.search(text)
+            after = m and max((i.end() for i in INPUT.finditer(text, 0, m.start())), default=0)
+            hs = m and list(HEADING.finditer(text, after, m.start()))
+            if hs:
+                h = hs[-1]
+                return {"file": f, "line": text.count("\n", 0, h.start()) + 1, "kind": h[1], "title": h[2]}
+        return None
 
     def state(self, path):
         """The log's splits of a file, its approve_text records in force (an entry

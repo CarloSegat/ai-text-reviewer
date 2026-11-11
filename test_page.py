@@ -525,9 +525,9 @@ class PageTest(unittest.TestCase):
         p = self.start(BASE3, WORK3)
         state = "[cards.map(p => [p.start, p.kind]), [...document.querySelectorAll('.strip')].map(s => s.textContent), " \
                 "$('#progress').textContent]"
-        self.assertEqual(p.js(state), [[[7, "changed"], [9, "changed"], [11, "changed"]], ["3 paragraphs＋ 2 ↑"],
+        self.assertEqual(p.js(state), [[[7, "changed"], [9, "changed"], [11, "changed"]], ["＋ 2 ↓3 paragraphs from the start of the file＋ 2 ↑"],
                                        "0 / 3 approved (0 added, 0 removed) · 0 open comments"])
-        p.js("$('.strip button').click()")
+        p.js("$('.strip button:last-of-type').click()")
         self.assertEqual(until(lambda: p.js("cards.length") == 5 and p.js(state), 5),
                          [[[3, "same"], [5, "same"], [7, "changed"], [9, "changed"], [11, "changed"]], ["＋ 1"],
                           "0 / 3 approved (2 added, 0 removed) · 0 open comments"])
@@ -545,6 +545,27 @@ class PageTest(unittest.TestCase):
         p.js("$('#progress button').click()")
         self.assertEqual(until(lambda: p.js("cards.length") == 4 and p.js(state)[0], 5),
                          [[5, "same"], [7, "changed"], [9, "changed"], [11, "changed"]])
+
+    def test_file_end_strip_reaches_the_next_file_and_a_file_without_changes_shows(self):
+        tail = "\n\nFirst tail.\n\nSecond tail.\n\nThird tail.\n"
+        p = self.start(BASE3 + tail, WORK3 + tail)
+        self.assertEqual(p.js("[...document.querySelectorAll('.strip')].map(s => s.textContent)"),
+                         ["＋ 2 ↓3 paragraphs from the start of the file＋ 2 ↑", "＋ 2 ↓3 paragraphs to the end of the file＋ 2 ↑"])
+        p.js("document.querySelectorAll('.strip')[1].querySelector('button:last-of-type').click()")
+        self.assertEqual(until(lambda: p.js("cards.length") == 5 and p.js("cards.map(p => p.start)"), 5), [7, 9, 11, 16, 18])
+        # Without a change, the file still shows, behind 1 strip.
+        p2 = self.start(BASE, BASE)
+        self.assertEqual(p2.js("[$('#doc h2').textContent, [...document.querySelectorAll('.strip')].map(s => s.textContent)]"),
+                         ["doc.tex", ["＋ 2 ↓3 paragraphs＋ 2 ↑"]])
+
+    def test_first_paragraph_card_shows_the_heading_before_the_file(self):
+        p = self.start("Alpha one.\n\nBeta two.\n", "Alpha ONE.\n\nBeta two.\n")
+        (self.repo / "main.tex").write_text("\\section{Security}\n\\label{s}\n\\input{doc}\n")
+        p.js("loadDoc(true)")
+        self.assertEqual(until(lambda: p.js("$('.parent-heading')?.textContent", quiet=True), 5), "§ Securitymain.tex:1")
+        p.js("$('[data-act=hide]').click()")
+        self.assertEqual(until(lambda: p.js("!$('.card') && $('.strip')?.textContent === '＋ 2'", quiet=True), 5), True)
+        self.assertEqual(p.js("$('.parent-heading')"), None)
 
 if __name__ == "__main__":
     unittest.main()

@@ -313,6 +313,15 @@ class Worker(Case):
                       "Reviewer, on: ONE\nWhy caps?\n\nClaude: Emphasis. Keep it?\n\n"
                       "Reviewer asked for context on: Alpha\nClaude: Alpha is the first group.\n\nDo what", prompts[1])
 
+    def test_heading_is_the_section_right_before_the_input(self):
+        rv = self.make("Alpha one.\n", "Alpha ONE.\n", path="sec.tex")
+        main = rv.repo / "main.tex"
+        main.write_text("\\section{Intro}\n\\input{intro}\n\n\\section{Security}\n\\label{s}\n% \\input{sec}\n\\input{sec}\n\\input{other}\n")
+        self.assertEqual([rv.heading("sec.tex"), rv.heading("other.tex")],
+                         [{"file": "main.tex", "line": 4, "kind": "section", "title": "Security"}, None])
+        main.write_text("\\section{A \\emph{B}}\\label{x}\n\\input{chapters/sec.tex}\n")
+        self.assertEqual(rv.doc()["files"][0]["heading"], {"file": "main.tex", "line": 1, "kind": "section", "title": "A \\emph{B}"})
+
 # A paragraph inserted between 2 kept ones: 1 passage of 1 hunk, base text "".
 L = ["Membership changes go through the governance group vote and take effect at once.",
      "A member that leaves loses its rights immediately after the vote closes.",
