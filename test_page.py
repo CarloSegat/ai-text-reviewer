@@ -549,6 +549,32 @@ class PageTest(unittest.TestCase):
             until(lambda: len(self.log()) > n)
         self.assertEqual([e.get("history") for e in self.log() if e["type"] == "comment"][-2:], [["c1", "c2"], None])
 
+    def test_history_holds_only_its_passages_exchanges(self):
+        base = BASE + "\nRevoked credentials are stored.\nEvery verifier checks them.\nThe registry keeps them.\n\nThe end is near.\n"
+        # Line 9's sentence removed on a comment: its passage now ends at line 8, the next one starts at 10.
+        p = self.start(base, base.replace("are stored.", "are stored in the registry.").replace("The registry keeps them.\n", "")
+                       .replace("is near.", "is here."))
+        self.append({"id": "c1", "type": "comment", "passage": "0" * 12, "file": "doc.tex", "line": 9,
+                     "quote": "The registry keeps them.", "text": "Cut this sentence"})
+        self.append({"id": "r1", "type": "reply", "to": "c1", "text": "Cut it.", "edited": True})
+        self.append({"id": "c2", "type": "comment", "passage": p.js("cards[1].id"), "file": "doc.tex", "line": 10, "quote": "",
+                     "text": "Shorten it"})
+        self.append({"id": "r2", "type": "reply", "to": "c2", "text": "Done.", "edited": True})
+        hist = "[...document.querySelectorAll('.card')].map(c => [c.passage.start, $('.history summary', c)?.textContent ?? null, " \
+               "[...c.querySelectorAll('.history .note .body')].map(b => b.textContent)])"
+        until(lambda: p.js("log.length", quiet=True) == 4, 5)
+        self.assertEqual(p.js(hist), [[7, "History (1)", ["Cut this sentence", "Cut it."]], [10, "History (1)", ["Shorten it", "Done."]]])
+        p.js("window.confirm = () => true; $('.history [data-id=c2]').click()")
+        self.assertEqual(until(lambda: p.js(hist)[1][1] is None and p.js(hist), 5),
+                         [[7, "History (1)", ["Cut this sentence", "Cut it."]], [10, None, []]])
+        # The passage above leaves the view: its History goes with it, not into the emptied one.
+        self.click(0, "hide")
+        self.assertEqual(until(lambda: p.js("cards.length") == 1 and p.js(hist), 5), [[10, None, []]])
+        p.js("location.reload()")
+        until(lambda: p.js("typeof doc !== 'undefined' && !!doc", quiet=True))
+        self.assertEqual(p.js(hist), [[10, None, []]])
+        self.assertEqual([(e["type"], e.get("to"), e.get("show")) for e in self.log()][-2:], [("delete", "c2", None), ("view", None, False)])
+
     # Blocks in view: + strips add unchanged paragraphs as cards, ✕ removes a card; the count stays put.
 
     def test_plus_strip_and_remove_keep_the_count(self):
