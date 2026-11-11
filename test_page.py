@@ -567,5 +567,19 @@ class PageTest(unittest.TestCase):
         self.assertEqual(until(lambda: p.js("!$('.card') && $('.strip')?.textContent === '＋ 2'", quiet=True), 5), True)
         self.assertEqual(p.js("$('.parent-heading')"), None)
 
+    def test_purpose_button_asks_about_the_selection(self):
+        p = self.start()
+        n = len(self.log())
+        p.js("""{ const w = document.createTreeWalker($('.card .text'), NodeFilter.SHOW_TEXT);
+                  while (w.nextNode() && !w.currentNode.data.includes('Membership'));
+                  const r = document.createRange(), at = w.currentNode.data.indexOf('Membership');
+                  r.setStart(w.currentNode, at); r.setEnd(w.currentNode, at + 10);
+                  getSelection().removeAllRanges(); getSelection().addRange(r); updateTool();
+                  $('#tool [data-act=purpose]').click(); }""")
+        until(lambda: len(self.log()) > n)
+        e = self.log()[-1]
+        self.assertEqual([e["type"], e["quote"], e["line"], e["text"]],
+                         ["comment", "Membership", 5, "What is the goal or purpose of this sentence? Answer only; do not edit."])
+
 if __name__ == "__main__":
     unittest.main()

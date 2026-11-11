@@ -141,6 +141,7 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 3px;
 <div id="tool" hidden>
   <button data-act="comment">Comment</button>
   <button data-act="context" id="ctxbtn">Contextualize</button>
+  <button data-act="purpose" title="Ask Claude what this sentence is for, without editing">🎯❓</button>
 </div>
 <div id="hmenu" hidden>
   <button data-h="approve_edit" class="primary">Approve edit</button>
@@ -519,6 +520,7 @@ async function contextualize(card, quote, line) {
 
 // Selection toolbar: appears for a selection inside one passage's text.
 const tool = $("#tool");
+const PURPOSE = "What is the goal or purpose of this sentence? Answer only; do not edit.";
 function selectionInCard() {
   const sel = getSelection();
   if (!sel.rangeCount || sel.isCollapsed) return null;
@@ -540,7 +542,7 @@ function updateTool() {
   pending = selectionInCard();
   if (!pending) { tool.hidden = true; return; }
   const r = pending.range.getBoundingClientRect();
-  tool.style.left = Math.max(8, Math.min(r.left + scrollX, innerWidth - 220)) + "px";
+  tool.style.left = Math.max(8, Math.min(r.left + scrollX, innerWidth - 280)) + "px";
   tool.style.top = (r.bottom + scrollY + 6) + "px";
   hideMenu(); tool.hidden = false;
 }
@@ -576,7 +578,10 @@ tool.addEventListener("click", ev => {
   pending = null;
   getSelection().removeAllRanges();
   if (!card) return;
-  act === "comment" ? openComposer(card, quote, line) : contextualize(card, quote, line);
+  if (act === "comment") openComposer(card, quote, line);
+  else if (act === "purpose") run(card, () => post({ type: "comment", passage: card.passage.id, file: card.passage.file, line, quote,
+    model: Object.values(info.models || { Claude: info.model })[0], text: PURPOSE }));
+  else contextualize(card, quote, line);
 });
 
 // One hunk's menu: approve it, put the old text back, or comment on it.
