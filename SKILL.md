@@ -18,11 +18,11 @@ Arguments: $ARGUMENTS
    It prints the URL (port 8765 or the next free one). Open it with `open <url>` and give it to the user.
 3. Watch the log with Monitor (`timeout_ms` 1800000, re-armed at each expiry while the server runs). With an API key (see Contextualize) the server answers comments itself, so watch reverts only:
    `tail -n0 -F .review/log.jsonl | grep --line-buffered -E '"type": "revert"'`
-   Without a key, watch comments too: `-E '"type": "(comment|revert)"'`.
+   Without a key, watch comments and cancels too: `-E '"type": "(comment|revert|delete)"'`.
 
 ## Act on each comment
 
-With an API key the server does this step: each comment goes, one at a time, to `claude -p` in the repo on the model its send button names (`claude-sonnet-5-5`, the default, or `claude-opus-5-5`), with Read, Grep, Glob and Edit inside the repo, no shell, and the repo's CLAUDE.md rules. Its answer is logged as the reply, with its cost and `edited` (whether one of its own Edit calls succeeded on a reviewed file). Comments a stopped server left open run when it starts. Without a key:
+With an API key the server does this step: each comment goes, one at a time, to `claude -p` in the repo on the model its send button names (`claude-sonnet-5-5`, the default, or `claude-opus-5-5`), with Read, Grep, Glob and Edit inside the repo, no shell, and the repo's CLAUDE.md rules. Its answer is logged as the reply, with its cost and `edited` (whether one of its own Edit calls succeeded on a reviewed file). Comments a stopped server left open run when it starts. The page's Cancel on a comment waiting for its reply logs a `delete` naming it: the server skips it, or kills its `claude -p` and logs no reply (an edit already made stays, as a change to review); without a key, stop acting on it and do not reply. Without a key:
 
 A comment is a prompt from the user, anchored to `file`, `line` and the selected `quote` (empty when the whole passage is meant). Do what it asks under the repo's rules (wording, asking before deleting, committing only when told). Then answer it, in 1 to 3 sentences, saying what changed or why nothing did:
 

@@ -475,6 +475,15 @@ class PageTest(unittest.TestCase):
         self.assertEqual(until(lambda: p.js(f"!{side}"), 5), True)
         self.assertEqual(until(lambda: p.js("$('.card').classList.contains('done')"), 5), True)
 
+    def test_cancel_withdraws_a_waiting_comment(self):
+        p = self.start()
+        self.append({"id": "c1", "type": "comment", "passage": p.js("cards[0].id"), "file": "doc.tex", "line": 5, "quote": "", "text": "Name the registry"})
+        side = "$('#side').textContent.includes('Name the registry')"
+        self.assertEqual(until(lambda: p.js(side, quiet=True), 5), True)
+        p.js("$('.card [data-act=cancel]').click()")
+        self.assertEqual(until(lambda: p.js(f"!{side} && !$('.card .thread .note')"), 5), True)
+        self.assertEqual([(e["type"], e.get("to")) for e in self.log()][-1], ("delete", "c1"))
+
 
     def test_open_comment_link_shows_the_comment_on_a_long_card(self):
         long = "\n".join([PARA] * 6)   # a card taller than the window, its thread below the fold

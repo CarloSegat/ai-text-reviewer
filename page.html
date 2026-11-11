@@ -195,7 +195,9 @@ function derive() {
     if (e.type === "commit") { S.queued.delete(e.passage); S.commits[e.passage] = e; S.spent += e.cost || 0; }
     if (e.type === "context") S.spent += e.cost || 0;
   }
-  S.talk = S.talk.filter(e => !S.deleted.has(e.id));   // deleted from History: never shown or sent again
+  // Deleted from History, or cancelled before its reply: never shown or sent again.
+  S.talk = S.talk.filter(e => !S.deleted.has(e.id));
+  S.comments = S.comments.filter(e => !S.deleted.has(e.id));
   S.open = S.comments.filter(e => !S.replies[e.id]);
   // Answered without an edit (a question, a refusal, a failure): shown until dismissed.
   S.asked = S.comments.filter(e => S.replies[e.id]?.at(-1).edited === false && !S.dismissed.has(e.id));
@@ -379,6 +381,7 @@ function renderState() {
     const n = note("You", c);
     n.id = "c-" + c.id;
     if (info.worker) n.children[1].append(" · on it…");
+    n.append(el("div", {}, el("button", { "data-act": "cancel", "data-id": c.id }, "Cancel")));
     threads[home(c)]?.append(n);
   }
   for (const c of S.asked) {
@@ -660,7 +663,7 @@ $("#doc").addEventListener("click", ev => {
   if (act === "note") openComposer(card, "", first(p));
   if (act === "hide") run(card, () => view([p], false));
   if (act === "dismiss") run(card, () => post({ type: "dismiss", to: ev.target.dataset.id, passage: p.id, file: p.file, line: p.start }));
-  if (act === "delete" && confirm("Delete this exchange from the passage's history? Claude no longer gets it with the block history."))
+  if (act === "cancel" || act === "delete" && confirm("Delete this exchange from the passage's history? Claude no longer gets it with the block history."))
     run(card, () => post({ type: "delete", to: ev.target.dataset.id, passage: p.id, file: p.file, line: p.start }));
   if (act === "approve") run(card, async () => {
     if (pOk(p) && p.dirty && S.queued.has(p.id)) return;   // committing already

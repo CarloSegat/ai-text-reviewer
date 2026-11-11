@@ -584,6 +584,7 @@ class Review:
         self.seen = {}   # path -> (text, hunk keys) at the last look, for track()
         self.queue = queue.Queue()   # comments and approvals, handled one at a time
         self.agent = False           # comments go to claude -p (there is an API key)
+        self.jobs, self.cancelled = {}, set()   # comment id -> its running claude -p; comments withdrawn
 
     def text(self, path):
         f = self.repo / path
@@ -744,9 +745,10 @@ class Review:
             return self.append({"type": "revert", "passage": p["id"], "file": path, "line": p["start"],
                                 "removed": new, "restored": old})
 
-    def claude(self, prompt, tools, model=MODEL):
+    def claude(self, prompt, tools, model=MODEL, job=None):
         """Run claude -p in the repo on the Keychain API key; return its result
-        event, with "edits", the files its tool calls changed."""
+        event, with "edits", the files its tool calls changed. job: the comment
+        it answers, which cancel() stops."""
         key = api_key()
         if not key:
             raise RuntimeError(f"No API key in the Keychain (service {KEYCHAIN_SERVICE}).")
@@ -755,17 +757,27 @@ class Review:
         env = {k: v for k, v in os.environ.items()
                if not k.startswith("CLAUDE") and k not in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")}
         env["ANTHROPIC_API_KEY"] = key
-        r = subprocess.run(["claude", "-p", prompt, "--model", model, "--allowedTools", tools,
-                            "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose"],
-                           cwd=self.repo, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                           timeout=600)
-        events = [json.loads(l) for l in r.stdout.splitlines() if l.startswith("{")]
+        with subprocess.Popen(["claude", "-p", prompt, "--model", model, "--allowedTools", tools,
+                               "--permission-mode", "dontAsk", "--output-format", "stream-json", "--verbose"],
+                              cwd=self.repo, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True) as p:
+            self.jobs[job] = p   # job None: a contextualization or a commit message, which nothing cancels
+            if job in self.cancelled:   # cancel() adds before it looks, this looks after adding: one kills it
+                p.kill()
+            try:
+                out, err = p.communicate(timeout=600)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                raise
+            finally:
+                self.jobs.pop(job, None)
+        events = [json.loads(l) for l in out.splitlines() if l.startswith("{")]
         init = next((e for e in events if e.get("type") == "system" and e.get("subtype") == "init"), {})
         result = next((e for e in events if e.get("type") == "result"), None)
         if init.get("apiKeySource") != "ANTHROPIC_API_KEY":
             raise RuntimeError(f"claude -p did not use the API key (apiKeySource={init.get('apiKeySource')}).")
         if not result or result.get("is_error"):
-            raise RuntimeError((result or {}).get("result") or r.stderr[-500:] or "claude -p failed")
+            raise RuntimeError((result or {}).get("result") or err[-500:] or "claude -p failed")
         return {**result, "edits": edits(events)}
 
     def history(self, ids):
@@ -803,7 +815,7 @@ class Review:
         for e in reversed(self.log()):
             if e["type"] in ("commit", "unapprove"):
                 done.add(("approve", e.get("passage")))
-            elif e["type"] == "reply":
+            elif e["type"] in ("reply", "delete"):
                 done.add(("comment", e["to"]))
             elif e["type"] in ("approve", "comment"):
                 k = (e["type"], e["passage"] if e["type"] == "approve" else e["id"])
@@ -816,6 +828,13 @@ class Review:
     def enqueue(self, e):
         if e["type"] == "approve" or (e["type"] == "comment" and self.agent):
             self.queue.put(e)
+
+    def cancel(self, cid):
+        """Withdraw a comment before its reply: answer() skips it, or kills its claude -p."""
+        self.cancelled.add(cid)
+        p = self.jobs.get(cid)
+        if p:
+            p.kill()
 
     def work(self):
         while True:
@@ -884,13 +903,15 @@ class Review:
         return self.append({**at, "sha": sha, "message": msg, "cost": cost, "model": MODEL if cost else None})
 
     def answer(self, c):
+        if c["id"] in self.cancelled:
+            return
         model, edited = c.get("model", MODEL), set()
         try:
             earlier = self.history(c.get("history") or [])
             r = self.claude(COMMENT_PROMPT.format(file=c["file"], line=c["line"], text=c["text"],
                                                   quote=c.get("quote") or "(none: the whole passage)",
                                                   history=earlier and "\n\nEarlier exchanges on this passage, oldest first "
-                                                  "(the text may have changed since):\n\n" + earlier), EDIT_TOOLS, model)
+                                                  "(the text may have changed since):\n\n" + earlier), EDIT_TOOLS, model, c["id"])
             text, cost = r["result"], r.get("total_cost_usd")
             edited = {(self.repo / f).resolve() for f in r["edits"]}
         except Exception as e:
@@ -898,6 +919,8 @@ class Review:
         # edited: whether the answer itself changed a reviewed file; the page
         # keeps showing the comment when it did not (a question, a refusal, a failure).
         self.track()
+        if c["id"] in self.cancelled:   # stopped midway: edits it made stay, as changes to review
+            return
         self.append({"type": "reply", "to": c["id"], "text": text, "cost": cost, "model": model,
                      "edited": any((self.repo / p).resolve() in edited for p in self.files)})
 
@@ -1035,7 +1058,7 @@ def handler(review, port):
                         return self.send(400, {"error": "bad model"})
                     keep = {k: body[k] for k in ("type", "passage", "file", "line", "quote", "text", "to", "model", "history", "passages", "show") if k in body}
                     e = review.append(keep)
-                    review.enqueue(e)
+                    review.cancel(e["to"]) if e["type"] == "delete" else review.enqueue(e)
                     return self.send(200, e)
                 act = {"/api/revert": review.revert, "/api/approve": review.approve, "/api/withdraw": review.withdraw}
                 if self.path in act:
@@ -1101,9 +1124,9 @@ def main():
             sys.exit(f"no comment {a.id}")
         Review(repo, "", []).append({"type": "reply", "to": a.id, "text": a.text})
     else:
-        answered = {e["to"] for e in entries if e["type"] == "reply"}
+        closed = {e["to"] for e in entries if e["type"] in ("reply", "delete")}
         for e in entries:
-            if e["type"] == "comment" and e["id"] not in answered:
+            if e["type"] == "comment" and e["id"] not in closed:
                 print(json.dumps(e, ensure_ascii=False))
 
 

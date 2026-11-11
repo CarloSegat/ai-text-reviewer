@@ -263,23 +263,50 @@ class Worker(Case):
 
     def run_answer(self, rv, events, during):
         """answer() with claude -p printing events while during() runs."""
-        real = review.subprocess.run
+        out = [{"type": "system", "subtype": "init", "apiKeySource": "ANTHROPIC_API_KEY"}, *events,
+               {"type": "result", "subtype": "success", "is_error": False, "result": "Done.", "total_cost_usd": 0.01}]
+        script = "import sys; sys.stdout.write(sys.argv[1])", "\n".join(map(json.dumps, out))
+        self.fake_claude(rv, script, during)
+        rv.answer(rv.append({"type": "comment", "passage": "x", "file": "f.tex", "line": 1, "text": "?", "quote": ""}))
+        return [e for e in rv.log() if e["type"] == "reply"][-1]["edited"]
 
-        def run(cmd, *a, **kw):
+    def fake_claude(self, rv, script, during=lambda: None):
+        """claude -p runs python -c script (with its arguments) after during()."""
+        real, key = review.subprocess.Popen, review.api_key
+
+        def popen(cmd, *a, **kw):
             if cmd[0] != "claude":
                 return real(cmd, *a, **kw)
             during()
-            out = [{"type": "system", "subtype": "init", "apiKeySource": "ANTHROPIC_API_KEY"}, *events,
-                   {"type": "result", "subtype": "success", "is_error": False, "result": "Done.", "total_cost_usd": 0.01}]
-            return subprocess.CompletedProcess(cmd, 0, "\n".join(map(json.dumps, out)), "")
-        review.subprocess.run, key = run, review.api_key
-        review.api_key = lambda: "k"
-        try:
-            c = rv.append({"type": "comment", "passage": "x", "file": "f.tex", "line": 1, "text": "?", "quote": ""})
-            rv.answer(c)
-        finally:
-            review.subprocess.run, review.api_key = real, key
-        return [e for e in rv.log() if e["type"] == "reply"][-1]["edited"]
+            return real([sys.executable, "-c", *script], *a, **kw)
+        review.subprocess.Popen, review.api_key = popen, lambda: "k"
+        self.addCleanup(setattr, review, "api_key", key)
+        self.addCleanup(setattr, review.subprocess, "Popen", real)
+
+    def test_cancel_stops_a_running_answer_and_leaves_no_reply(self):
+        rv = self.make("Alpha one.\n", "Alpha ONE.\n")
+        self.fake_claude(rv, ["import time; time.sleep(60)"])
+        c = rv.append({"type": "comment", "passage": "x", "file": "f.tex", "line": 1, "text": "Lowercase it", "quote": ""})
+        t = threading.Thread(target=rv.answer, args=(c,))
+        t.start()
+        for _ in range(100):
+            if c["id"] in rv.jobs:
+                break
+            time.sleep(0.05)
+        started = time.time()
+        rv.cancel(c["id"])
+        t.join(10)
+        self.assertEqual((t.is_alive(), time.time() - started < 5), (False, True))
+        self.assertEqual([e["type"] for e in rv.log() if e["type"] != "edit"], ["comment"])
+
+    def test_cancelled_comment_never_runs(self):
+        rv = self.make("Alpha one.\n", "Alpha ONE.\n")
+        ran = []
+        rv.claude = lambda *a: ran.append(a) or {"result": "Done.", "edits": []}
+        c = rv.append({"type": "comment", "passage": "x", "file": "f.tex", "line": 1, "text": "Lowercase it", "quote": ""})
+        rv.cancel(c["id"])
+        rv.answer(c)
+        self.assertEqual((ran, [e["type"] for e in rv.log()]), ([], ["comment"]))
 
     def test_answer_edited_only_by_its_own_edit(self):
         rv = self.make("Alpha one.\n\nBeta two.\n", "Alpha ONE.\n\nBeta TWO.\n")
@@ -305,7 +332,7 @@ class Worker(Case):
         k = rv.append({"type": "context", **at, "quote": "Alpha", "text": "Alpha is the first group."})
         rv.append({"type": "comment", **at, "quote": "", "text": "Not sent"})
         prompts = []
-        rv.claude = lambda prompt, tools, model=review.MODEL: prompts.append(prompt) or {"result": "Done.", "edits": []}
+        rv.claude = lambda prompt, *a: prompts.append(prompt) or {"result": "Done.", "edits": []}
         for ids in ([], [k["id"], c["id"]]):
             rv.answer(rv.append({"type": "comment", **at, "quote": "", "text": "Lowercase it", "history": ids}))
         self.assertIn("Comment: Lowercase it\n\nDo what", prompts[0])
