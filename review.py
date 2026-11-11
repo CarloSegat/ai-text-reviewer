@@ -29,7 +29,7 @@ MESSAGE = re.compile(r"(feat|fix|test|docs|refactor|tools)\([^()\n]+\)\n\n[^\n]+
 INPUT = re.compile(r"^[^%\n]*\\(?:input|include)\{[^{}]*\}", re.M)
 HEADING = re.compile(r"(?m)^[ \t]*\\(part|chapter|section|subsection|subsubsection|paragraph)\*?(?:\[[^\]\n]*\])?"
                      r"\{((?:[^{}\n]|\{[^{}\n]*\})*)\}")
-PAGE_TYPES = {"comment", "dismiss", "split", "delete", "view"}
+PAGE_TYPES = {"comment", "note", "dismiss", "split", "delete", "view"}
 # A reference, label, environment or inline math is one token, so a diff never
 # splits it and the page can render it.
 TOKEN = re.compile(r"\\(?:cite[a-z]*|ref|eqref|autoref|cref|label|path|url|begin|end|input|includegraphics)\*?"

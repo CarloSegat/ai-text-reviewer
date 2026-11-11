@@ -10,7 +10,7 @@
 :root {
   --bg: #f7f7f4; --panel: #ffffff; --fg: #1d1f21; --muted: #6b6f73; --line: #dcdcd6;
   --accent: #2f5d8a; --ins: #1f7a4d; --ins-bg: #dff2e6; --del: #b03a2e; --del-bg: #f8e1de;
-  --ok: #1f7a4d; --warn: #b7791f; --added: #3b6fd4; --quote: #eef1f5;
+  --ok: #1f7a4d; --warn: #b7791f; --added: #3b6fd4; --quote: #eef1f5; --pin: #fdf3d3;
   --read: "Iowan Old Style", "Charter", "Georgia", serif;
   --ui: system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -18,7 +18,7 @@
 @media (prefers-color-scheme: dark) { :root {
   --bg: #16181b; --panel: #1e2125; --fg: #e4e4e0; --muted: #9a9ea3; --line: #33373c;
   --accent: #7fb0e0; --ins: #6fd39d; --ins-bg: #1d3a2b; --del: #f08a7e; --del-bg: #43231f;
-  --ok: #6fd39d; --warn: #e3b25a; --added: #7ea6f2; --quote: #262b31; color-scheme: dark;
+  --ok: #6fd39d; --warn: #e3b25a; --added: #7ea6f2; --quote: #262b31; --pin: #36301f; color-scheme: dark;
 } }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 var(--ui); }
@@ -95,6 +95,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .note .body { white-space: pre-wrap; }
 .note.reply { margin-left: 18px; }
 .note.reply button { margin-top: 6px; }
+/* The reader's own notes: never sent to Claude. */
+.note.pinned { background: var(--pin); border-left: 3px solid var(--warn); border-radius: 4px; padding: 6px 10px; }
+.note.pinned .who { color: var(--warn); }
+.note.pinned button { margin-top: 6px; }
+.composer.pinned textarea { background: var(--pin); }
 .card > .err { border-top: 1px solid var(--line); padding: 6px 14px; }
 .composer { border-top: 1px solid var(--line); padding: 10px 14px; display: grid; gap: 8px; }
 .composer textarea { width: 100%; min-height: 70px; font: 14px/1.45 var(--ui); padding: 6px 8px; border: 1px solid var(--line);
@@ -147,6 +152,7 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 3px;
 </div>
 <div id="tool" hidden>
   <button data-act="comment">Comment</button>
+  <button data-act="note" title="A note to yourself on the selection: Claude never gets it">Note</button>
   <button data-act="context" id="ctxbtn">Contextualize</button>
   <button data-act="purpose" title="Ask Claude what this sentence is for, without editing">🎯❓</button>
 </div>
@@ -180,7 +186,7 @@ const inflight = new Set();  // contextualize requests still running
 const histOpen = new Set();  // passages whose History is unfolded
 
 function derive() {
-  S = { queued: new Set(), comments: [], replies: {}, dismissed: new Set(), deleted: new Set(), view: {}, commits: {}, talk: [], spent: 0, open: [], asked: [] };
+  S = { queued: new Set(), comments: [], replies: {}, dismissed: new Set(), deleted: new Set(), view: {}, commits: {}, talk: [], notes: [], spent: 0, open: [], asked: [] };
   for (const e of log) {
     // A passage approved whole waits for its commit (review.py commit()).
     if (e.type === "approve") S.queued.add(e.passage);
@@ -188,6 +194,7 @@ function derive() {
     if (e.type === "comment") S.comments.push(e);
     // A passage's conversation: its comments and contextualizations, in log order.
     if (e.type === "comment" || e.type === "context") S.talk.push(e);
+    if (e.type === "note") S.notes.push(e);
     if (e.type === "reply") { (S.replies[e.to] ||= []).push(e); S.spent += e.cost || 0; }
     if (e.type === "dismiss") S.dismissed.add(e.to);
     if (e.type === "delete") S.deleted.add(e.to);
@@ -197,6 +204,7 @@ function derive() {
   }
   // Deleted from History, or cancelled before its reply: never shown or sent again.
   S.talk = S.talk.filter(e => !S.deleted.has(e.id));
+  S.notes = S.notes.filter(e => !S.deleted.has(e.id));
   S.comments = S.comments.filter(e => !S.deleted.has(e.id));
   S.open = S.comments.filter(e => !S.replies[e.id]);
   // Answered without an edit (a question, a refusal, a failure): shown until dismissed.
@@ -263,7 +271,8 @@ function renderDoc() {
         el("div", { class: "head" },
           el("span", { class: "where" }, `${p.file}:${lineSpan(p)}`),
           el("span", { class: "gist" }, p.segs.filter(([o]) => o !== "-").map(([, t]) => t).join("").replace(/\s+/g, " ").slice(0, 160)),
-          el("button", { "data-act": "note" }, "Comment"),
+          el("button", { "data-act": "comment" }, "Comment"),
+          el("button", { "data-act": "note", title: "A note to yourself on this passage: Claude never gets it" }, "Note"),
           p.kind === "changed" && newText(p).trim().includes("\n") ? el("button", { "data-act": "split", title: "Cut this passage in 2 at the line nearest its middle" }, "Split in half") : null,
           p.kind === "changed" ? el("button", { "data-act": "approve" }, "Approve") : null,
           el("button", { "data-act": "hide", class: "x", title: "Remove this block from the view" }, "✕")),
@@ -367,6 +376,14 @@ function renderState() {
   const threads = {};
   for (const p of cards) threads[p.id] = $(".thread", document.getElementById("p-" + p.id));
   for (const th of Object.values(threads)) th.replaceChildren();
+  // The reader's notes, on top: a note stays with its passage, like History.
+  for (const e of S.notes) {
+    const p = passageOf(e);
+    if (!cards.includes(p)) continue;
+    const n = note("Note", e, "pinned");
+    n.append(el("div", {}, el("button", { "data-act": "unnote", "data-id": e.id }, "Delete")));
+    threads[p.id].append(n);
+  }
   // Settled exchanges (answered comments, contextualizations), oldest first, folded under
   // History. Those of a passage that is no card stay with it, out of view.
   const past = {};
@@ -447,7 +464,7 @@ function renderSide() {
   }
   side.append(el("div", { class: "keys" },
     el("kbd", {}, "j"), " / ", el("kbd", {}, "k"), " next / previous change · ",
-    el("kbd", {}, "a"), " approve · ", el("kbd", {}, "c"), " comment on the passage · select text to comment or contextualize"));
+    el("kbd", {}, "a"), " approve · ", el("kbd", {}, "c"), " comment on the passage · select text to comment, note or contextualize"));
 }
 
 function focusCard(i) {
@@ -468,26 +485,28 @@ function lineOf(p, range) {
   return p.start + (srcText(pre.cloneContents()).match(/\n/g) || []).length;
 }
 
-function openComposer(card, quote, line) {
+// A comment for Claude, or (kind "note") a note to self, which Claude never gets.
+function openComposer(card, quote, line, kind = "comment") {
   // A draft stays: opening the same quote again brings it back, another quote opens beside it.
-  const same = [...card.querySelectorAll(".composer")].find(b => b.meta.quote === quote);
+  const same = [...card.querySelectorAll(".composer")].find(b => b.meta.quote === quote && b.meta.kind === kind);
   if (same) return $("textarea", same).focus();
-  const ta = el("textarea", { placeholder: "Prompt for Claude: what should change, or what to check" });
-  // One send button per model; the first (Sonnet) is the default and takes ⌘/Ctrl+Enter.
-  const models = Object.entries(info.models || { Claude: info.model });
+  const pin = kind === "note";
+  const ta = el("textarea", { placeholder: pin ? "Note to yourself: Claude never gets it" : "Prompt for Claude: what should change, or what to check" });
+  // One send button per model; the first (Sonnet) is the default and takes ⌘/Ctrl+Enter. A note has Save.
+  const models = pin ? [["note"]] : Object.entries(info.models || { Claude: info.model });
   const sends = models.map(([name, id], i) => {
-    const b = el("button", i ? {} : { class: "primary" }, `Send to ${name}`);
+    const b = el("button", i ? {} : { class: "primary" }, pin ? "Save note" : `Send to ${name}`);
     b.onclick = () => submit(id);
     return b;
   });
   const cancel = el("button", {}, "Cancel");
   const withHistory = el("input", { type: "checkbox" });
-  const box = el("div", { class: "composer" }, quote ? el("blockquote", {}, quote) : null, ta,
-    el("div", { class: "row" }, el("span", { class: "hint" }, `⌘/Ctrl+Enter sends to ${models[0][0]} · Esc to cancel`),
-      el("label", { title: "Also send Claude the earlier comments, replies and contextualizations on this passage" },
+  const box = el("div", { class: pin ? "composer pinned" : "composer" }, quote ? el("blockquote", {}, quote) : null, ta,
+    el("div", { class: "row" }, el("span", { class: "hint" }, `⌘/Ctrl+Enter ${pin ? "saves" : `sends to ${models[0][0]}`} · Esc to cancel`),
+      pin ? null : el("label", { title: "Also send Claude the earlier comments, replies and contextualizations on this passage" },
         withHistory, "Send full block history"),
       cancel, ...sends.reverse()));
-  box.meta = { quote, line };
+  box.meta = { quote, line, kind };
   $(".text", card).after(box);
   ta.focus();
   const submit = async model => {
@@ -496,7 +515,7 @@ function openComposer(card, quote, line) {
     const p = box.closest(".card").passage;   // a re-render may have moved the draft (loadDoc)
     try {
       const history = withHistory.checked ? { history: S.talk.filter(e => passageOf(e) === p).map(e => e.id) } : {};
-      await post({ type: "comment", passage: p.id, file: p.file, line, quote, model, text: ta.value.trim(), ...history });
+      await post({ type: kind, passage: p.id, file: p.file, line, quote, text: ta.value.trim(), ...(pin ? {} : { model, ...history }) });
       renderState(); box.remove();
     } catch (err) { sends.forEach(b => b.disabled = false); alertIn(box, err); }
   };
@@ -560,7 +579,7 @@ function updateTool() {
   pending = selectionInCard();
   if (!pending) { tool.hidden = true; return; }
   const r = pending.range.getBoundingClientRect();
-  tool.style.left = Math.max(8, Math.min(r.left + scrollX, innerWidth - 280)) + "px";
+  tool.style.left = Math.max(8, Math.min(r.left + scrollX, innerWidth - 340)) + "px";
   tool.style.top = (r.bottom + scrollY + 6) + "px";
   hideMenu(); tool.hidden = false;
 }
@@ -596,7 +615,7 @@ tool.addEventListener("click", ev => {
   pending = null;
   getSelection().removeAllRanges();
   if (!card) return;
-  if (act === "comment") openComposer(card, quote, line);
+  if (act === "comment" || act === "note") openComposer(card, quote, line, act);
   else if (act === "purpose") run(card, () => post({ type: "comment", passage: card.passage.id, file: card.passage.file, line, quote,
     model: Object.values(info.models || { Claude: info.model })[0], text: PURPOSE }));
   else contextualize(card, quote, line);
@@ -668,10 +687,11 @@ $("#doc").addEventListener("click", ev => {
   const card = ev.target.closest(".card");
   if (!act || !card) return;
   const p = card.passage;
-  if (act === "note") openComposer(card, "", first(p));
+  if (act === "comment" || act === "note") openComposer(card, "", first(p), act);
   if (act === "hide") run(card, () => view([p], false));
   if (act === "dismiss") run(card, () => post({ type: "dismiss", to: ev.target.dataset.id, passage: p.id, file: p.file, line: p.start }));
-  if (act === "cancel" || act === "delete" && confirm("Delete this exchange from the passage's history? Claude no longer gets it with the block history."))
+  if (act === "cancel" || act === "delete" && confirm("Delete this exchange from the passage's history? Claude no longer gets it with the block history.")
+      || act === "unnote" && confirm("Delete this note?"))
     run(card, () => post({ type: "delete", to: ev.target.dataset.id, passage: p.id, file: p.file, line: p.start }));
   if (act === "approve") run(card, async () => {
     if (pOk(p) && p.dirty && S.queued.has(p.id)) return;   // committing already

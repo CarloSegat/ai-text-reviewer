@@ -149,7 +149,8 @@ class Page:
 
 
 class PageTest(unittest.TestCase):
-    def start(self, base=BASE, work=WORK, check=None):
+    def start(self, base=BASE, work=WORK, check=None, path=None):
+        """path: a directory of stand-ins for security and claude, ahead of the default ones."""
         d = Path(tempfile.mkdtemp(dir=TMP))
         self.repo, tool = d / "repo", d / "tool"
         tool.mkdir()
@@ -165,7 +166,7 @@ class PageTest(unittest.TestCase):
         self.git("commit", "-qm", "base")
         self.git("tag", "base")
         self.write(work)
-        env = {**os.environ, "PATH": f"{TMP / 'bin'}:{os.environ['PATH']}"}
+        env = {**os.environ, "PATH": f"{path or TMP / 'bin'}:{os.environ['PATH']}"}
         self.srv = subprocess.Popen([sys.executable, str(tool / "review.py"), "serve", "--base", "base", "--port", str(free_port()),
                                      *(["--check", check] if check else []), "doc.tex"],
                                     cwd=self.repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -209,6 +210,14 @@ class PageTest(unittest.TestCase):
     def menu(self, k, h, act):
         self.p.js(f"document.querySelectorAll('.card')[{k}].querySelectorAll('.hunk')[{h}].click()")
         self.p.js(f"document.querySelector('#hmenu [data-h={act}]').click()")
+
+    def select(self, text):
+        """Select text in the first card, as a drag does, and show the selection bar."""
+        self.p.js(f"""{{ const w = document.createTreeWalker($('.card .text'), NodeFilter.SHOW_TEXT);
+                  while (w.nextNode() && !w.currentNode.data.includes('{text}'));
+                  const r = document.createRange(), at = w.currentNode.data.indexOf('{text}');
+                  r.setStart(w.currentNode, at); r.setEnd(w.currentNode, at + {len(text)});
+                  getSelection().removeAllRanges(); getSelection().addRange(r); updateTool(); }}""")
 
     def buttons(self):
         return self.p.js("[...document.querySelectorAll('.card [data-act=approve]')].map(b => b.textContent)")
@@ -346,8 +355,8 @@ class PageTest(unittest.TestCase):
 
     def test_rerender_keeps_focus_in_the_draft(self):
         p = self.start(BASE3, WORK3)
-        self.click(1, "note")
-        self.click(0, "note")            # opened last: focused
+        self.click(1, "comment")
+        self.click(0, "comment")            # opened last: focused
         p.js("document.querySelectorAll('.composer textarea')[1].value = 'second draft'")
         p.type("xy")
         self.write(WORK3.replace("Alpha paragraph", "Alpha para"))   # an edit re-renders the page
@@ -375,17 +384,17 @@ class PageTest(unittest.TestCase):
 
     def test_opening_a_composer_keeps_the_draft(self):
         p = self.start()
-        self.click(0, "note")
+        self.click(0, "comment")
         p.js("$('.composer textarea').value = 'keep me'")
-        self.click(0, "note")            # the same (whole passage) comment: the draft comes back
+        self.click(0, "comment")            # the same (whole passage) comment: the draft comes back
         self.assertEqual(p.js(CMDS), [[5, 5, "keep me"]])
         self.menu(0, 0, "comment")       # a comment on a change opens beside it
         self.assertEqual(p.js(CMDS), [[5, 5, ""], [5, 5, "keep me"]])
 
     def test_draft_follows_its_line_when_its_passage_goes(self):
         p = self.start(BASE3, WORK3)
-        self.click(0, "note")
-        self.click(1, "note")
+        self.click(0, "comment")
+        self.click(1, "comment")
         p.js("document.querySelectorAll('.composer textarea')[0].value = 'D7'")
         p.js("document.querySelectorAll('.composer textarea')[1].value = 'D9'")
         # Line 7's change reverted and line 9's reworded: both passages' ids go.
@@ -396,7 +405,7 @@ class PageTest(unittest.TestCase):
     def test_sent_comment_stays_sent_across_a_rerender(self):
         p = self.start()
         p.js(HOLD % (POSTED % "comment"))
-        self.click(0, "note")
+        self.click(0, "comment")
         p.js("$('.composer textarea').value = 'Tighten this'")
         p.js("$('.composer button.primary').click()")
         until(lambda: p.js("!!window.__held"))
@@ -409,7 +418,7 @@ class PageTest(unittest.TestCase):
 
     def test_cmd_enter_twice_sends_once(self):
         p = self.start()
-        self.click(0, "note")
+        self.click(0, "comment")
         p.js("""const ta = $('.composer textarea'); ta.value = 'Shorten this';
                 for (const i of [1, 2]) ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true }))""")
         time.sleep(1)
@@ -543,7 +552,7 @@ class PageTest(unittest.TestCase):
                          [[True, "History (2)", ["Shorten it", "Cut the second sentence.", "Name the registry", "Which registry?"]]])
         for check in (True, False):
             n = len(self.log())
-            self.click(0, "note")
+            self.click(0, "comment")
             p.js(f"{{ const b = $('.composer'); $('textarea', b).value = 'Lowercase it'; "
                  f"if ({str(check).lower()}) $('input[type=checkbox]', b).click(); $('.primary', b).click() }}")
             until(lambda: len(self.log()) > n)
@@ -626,16 +635,45 @@ class PageTest(unittest.TestCase):
     def test_purpose_button_asks_about_the_selection(self):
         p = self.start()
         n = len(self.log())
-        p.js("""{ const w = document.createTreeWalker($('.card .text'), NodeFilter.SHOW_TEXT);
-                  while (w.nextNode() && !w.currentNode.data.includes('Membership'));
-                  const r = document.createRange(), at = w.currentNode.data.indexOf('Membership');
-                  r.setStart(w.currentNode, at); r.setEnd(w.currentNode, at + 10);
-                  getSelection().removeAllRanges(); getSelection().addRange(r); updateTool();
-                  $('#tool [data-act=purpose]').click(); }""")
+        self.select("Membership")
+        p.js("$('#tool [data-act=purpose]').click()")
         until(lambda: len(self.log()) > n)
         e = self.log()[-1]
         self.assertEqual([e["type"], e["quote"], e["line"], e["text"]],
                          ["comment", "Membership", 5, "What is the goal or purpose of this sentence? Answer only; do not edit."])
+
+    # Notes: the reader's own remarks on a passage, which Claude never gets.
+
+    def test_note_shows_on_its_passage_and_never_reaches_claude(self):
+        bin = Path(tempfile.mkdtemp(dir=TMP))
+        ran = bin / "ran"
+        (bin / "security").write_text("#!/bin/sh\necho sk-test\n")   # an API key: comments go to claude -p
+        (bin / "claude").write_text(f"#!/bin/sh\nprintf '%s\\n' \"$2\" >> {ran}\nexit 1\n")
+        for f in ("security", "claude"):
+            (bin / f).chmod(0o755)
+        p = self.start(path=bin)
+        n = len(self.log())
+        self.select("Membership")
+        p.js("$('#tool [data-act=note]').click()")
+        p.js("{ const b = $('.composer.pinned'); $('textarea', b).value = 'Check the vote count'; $('.primary', b).click() }")
+        until(lambda: self.types(n) == ["note"])
+        e = self.log()[-1]
+        self.assertEqual({k: e[k] for k in ("type", "passage", "file", "line", "quote", "text")},
+                         {"type": "note", "passage": p.js("cards[0].id"), "file": "doc.tex", "line": 5, "quote": "Membership",
+                          "text": "Check the vote count"})
+        pinned = "[...document.querySelectorAll('.card .thread .note.pinned')].map(n => [$('.who', n).textContent, " \
+                 "$('blockquote', n)?.textContent, $('.body', n).textContent])"
+        self.assertEqual(p.js(pinned), [["Note", "Membership", "Check the vote count"]])
+        # A comment sent after it with the block history: claude -p runs for the comment alone, without the note.
+        self.click(0, "comment")
+        p.js("{ const b = $('.composer:not(.pinned)'); $('textarea', b).value = 'Shorten it'; "
+             "$('input[type=checkbox]', b).click(); $('.primary', b).click() }")
+        until(lambda: self.types(n) == ["note", "comment", "reply"], 10)
+        self.assertEqual([self.log()[-2]["history"], ran.read_text().count("Shorten it"), ran.read_text().count("vote count")], [[], 1, 0])
+        self.assertEqual(p.js(pinned), [["Note", "Membership", "Check the vote count"]])
+        p.js("window.confirm = () => true; $('.note.pinned [data-act=unnote]').click()")
+        self.assertEqual(until(lambda: p.js(pinned) == [] and self.log()[-1], 5)["to"], e["id"])
+        self.assertEqual(self.types(n), ["note", "comment", "reply", "delete"])
 
 if __name__ == "__main__":
     unittest.main()

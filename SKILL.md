@@ -1,6 +1,6 @@
 ---
 name: review-tool
-description: "Open a local page to review text changes since a git ref: each changed passage in full with insertions and deletions marked; the user approves or reverts single changes, approves passages, comments on selected text (prompts for Claude) and runs /contextualize on Sonnet with Console API credits. Use for /review-tool [base-ref] [files...]."
+description: "Open a local page to review text changes since a git ref: each changed passage in full with insertions and deletions marked; the user approves or reverts single changes, approves passages, comments on selected text (prompts for Claude) or notes it for themselves, and runs /contextualize on Sonnet with Console API credits. Use for /review-tool [base-ref] [files...]."
 argument-hint: [base-ref] [files...]
 disable-model-invocation: true
 ---
@@ -24,7 +24,7 @@ Arguments: $ARGUMENTS
 
 With an API key the server does this step: each comment goes, one at a time, to `claude -p` in the repo on the model its send button names (`claude-sonnet-5-5`, the default, or `claude-opus-5-5`), with Read, Grep, Glob and Edit inside the repo, no shell, and the repo's CLAUDE.md rules. Its answer is logged as the reply, with its cost and `edited` (whether one of its own Edit calls succeeded on a reviewed file). Comments a stopped server left open run when it starts. The page's Cancel on a comment waiting for its reply logs a `delete` naming it: the server skips it, or kills its `claude -p` and logs no reply (an edit already made stays, as a change to review); without a key, stop acting on it and do not reply. Without a key:
 
-A comment is a prompt from the user, anchored to `file`, `line` and the selected `quote` (empty when the whole passage is meant). Do what it asks under the repo's rules (wording, asking before deleting, committing only when told). Then answer it, in 1 to 3 sentences, saying what changed or why nothing did:
+A comment is a prompt from the user, anchored to `file`, `line` and the selected `quote` (empty when the whole passage is meant). A `note`, anchored the same way, is the user's remark to themselves: the server never sends it to `claude -p`; never act on it, or on the `delete` that removes it, and never reply to it. Do what it asks under the repo's rules (wording, asking before deleting, committing only when told). Then answer it, in 1 to 3 sentences, saying what changed or why nothing did:
 
 `python3 ~/.claude/skills/review-tool/review.py reply <id> "<text>"`
 
@@ -42,4 +42,4 @@ The button runs `claude -p "/contextualize <selection>"` on `claude-sonnet-5-5`,
 
 (it prompts for the key; take it from the Console organization linked to the plan under claude.ai Settings > Billing > API credits).
 
-State lives in `<repo>/.review/log.jsonl`, append-only and ignored by git: comments, replies, approvals and contextualize results with their cost.
+State lives in `<repo>/.review/log.jsonl`, append-only and ignored by git: comments, notes, replies, approvals and contextualize results with their cost.
