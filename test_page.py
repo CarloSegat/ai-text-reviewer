@@ -540,16 +540,16 @@ class PageTest(unittest.TestCase):
                "[...d.querySelectorAll('.note .body')].map(b => b.textContent)])"
         live = "[...document.querySelectorAll('.card .thread > .note .body')].map(b => b.textContent)"
         self.assertEqual(until(lambda: p.js(hist, quiet=True), 5),
-                         [[False, "History (2)", ["Shorten it", "Cut the second sentence.", "The registry is the group's."]]])
+                         [[False, "History (2)Delete all", ["Shorten it", "Cut the second sentence.", "The registry is the group's."]]])
         self.assertEqual(p.js(live), ["Name the registry", "Which registry?"])
         p.js("$('.card .history summary').click(); $('[data-act=dismiss]').click()")
-        self.assertEqual(until(lambda: p.js(hist)[0][1] == "History (3)" and p.js(hist), 5),
-                         [[True, "History (3)", ["Shorten it", "Cut the second sentence.", "The registry is the group's.",
+        self.assertEqual(until(lambda: p.js(hist)[0][1] == "History (3)Delete all" and p.js(hist), 5),
+                         [[True, "History (3)Delete all", ["Shorten it", "Cut the second sentence.", "The registry is the group's.",
                                                  "Name the registry", "Which registry?"]]])
         self.assertEqual(p.js(live), [])
         p.js("window.confirm = () => true; $('.history [data-id=k1]').click()")
-        self.assertEqual(until(lambda: p.js(hist)[0][1] == "History (2)" and p.js(hist), 5),
-                         [[True, "History (2)", ["Shorten it", "Cut the second sentence.", "Name the registry", "Which registry?"]]])
+        self.assertEqual(until(lambda: p.js(hist)[0][1] == "History (2)Delete all" and p.js(hist), 5),
+                         [[True, "History (2)Delete all", ["Shorten it", "Cut the second sentence.", "Name the registry", "Which registry?"]]])
         for check in (True, False):
             n = len(self.log())
             self.click(0, "comment")
@@ -572,10 +572,10 @@ class PageTest(unittest.TestCase):
         hist = "[...document.querySelectorAll('.card')].map(c => [c.passage.start, $('.history summary', c)?.textContent ?? null, " \
                "[...c.querySelectorAll('.history .note .body')].map(b => b.textContent)])"
         until(lambda: p.js("log.length", quiet=True) == 4, 5)
-        self.assertEqual(p.js(hist), [[7, "History (1)", ["Cut this sentence", "Cut it."]], [10, "History (1)", ["Shorten it", "Done."]]])
+        self.assertEqual(p.js(hist), [[7, "History (1)Delete all", ["Cut this sentence", "Cut it."]], [10, "History (1)Delete all", ["Shorten it", "Done."]]])
         p.js("window.confirm = () => true; $('.history [data-id=c2]').click()")
         self.assertEqual(until(lambda: p.js(hist)[1][1] is None and p.js(hist), 5),
-                         [[7, "History (1)", ["Cut this sentence", "Cut it."]], [10, None, []]])
+                         [[7, "History (1)Delete all", ["Cut this sentence", "Cut it."]], [10, None, []]])
         # The passage above leaves the view: its History goes with it, not into the emptied one.
         self.click(0, "hide")
         self.assertEqual(until(lambda: p.js("cards.length") == 1 and p.js(hist), 5), [[10, None, []]])
@@ -583,6 +583,26 @@ class PageTest(unittest.TestCase):
         until(lambda: p.js("typeof doc !== 'undefined' && !!doc", quiet=True))
         self.assertEqual(p.js(hist), [[10, None, []]])
         self.assertEqual([(e["type"], e.get("to"), e.get("show")) for e in self.log()][-2:], [("delete", "c2", None), ("view", None, False)])
+
+    def test_delete_all_empties_history_in_1_confirm(self):
+        p = self.start()
+        at = {"passage": p.js("cards[0].id"), "file": "doc.tex", "line": 5, "quote": ""}
+        self.append({"id": "c1", "type": "comment", **at, "text": "Shorten it"})
+        self.append({"id": "r1", "type": "reply", "to": "c1", "text": "Cut the second sentence.", "edited": True})
+        self.append({"id": "k1", "type": "context", **at, "quote": "registry", "text": "The registry is the group's."})
+        self.append({"id": "n1", "type": "note", **at, "text": "Check the vote count"})
+        hist = "[...document.querySelectorAll('.card .history')].map(d => [d.open, $('summary', d).textContent])"
+        self.assertEqual(until(lambda: p.js(hist, quiet=True), 5), [[False, "History (2)Delete all"]])
+        n = len(self.log())
+        p.js("window.confirm = m => (window.__asked = m, false); $('.history [data-act=clear]').click()")
+        self.assertEqual([p.js("window.__asked"), p.js(hist), len(self.log())],
+                         ["Delete all 2 exchanges of this passage's history? Claude no longer gets them with the block history.",
+                          [[False, "History (2)Delete all"]], n])
+        p.js("$('.history summary').click()")
+        p.js("window.confirm = () => true; $('.history [data-act=clear]').click()")
+        self.assertEqual(until(lambda: p.js(hist) == [] and p.js(hist), 5), [])
+        self.assertEqual([(e["type"], e["to"]) for e in self.log()[n:]], [("delete", "c1"), ("delete", "k1")])
+        self.assertEqual(p.js("[...document.querySelectorAll('.card .note.pinned .body')].map(b => b.textContent)"), ["Check the vote count"])
 
     # Blocks in view: + strips add unchanged paragraphs as cards, ✕ removes a card; the count stays put.
 

@@ -110,6 +110,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .history summary { color: var(--muted); font-size: 12.5px; cursor: pointer; list-style: none;
   display: flex; align-items: center; gap: 6px; width: fit-content; padding: 4px 8px 4px 0; }
 .history summary:hover { color: var(--fg); }
+.history summary button { font-size: 11.5px; padding: 1px 7px; margin-left: 4px; }
 .history summary::-webkit-details-marker { display: none; }
 .history summary::before { content: ""; width: 18px; height: 18px; background: currentColor; transition: transform .15s;
   --tri: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.5 3.5 11.5 8l-6 4.5z' fill='none' stroke='black' stroke-width='1.3' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -390,7 +391,8 @@ function renderState() {
   for (const e of S.talk) if (!S.live.includes(e) && cards.includes(passageOf(e))) (past[passageOf(e).id] ||= []).push(e);
   for (const [pid, es] of Object.entries(past)) {
     if (!threads[pid]) continue;
-    const d = el("details", { class: "history" }, el("summary", {}, `History (${es.length})`));
+    const d = el("details", { class: "history" }, el("summary", {}, `History (${es.length})`,
+      el("button", { "data-act": "clear", "data-ids": es.map(e => e.id).join(" "), title: "Delete every exchange of this History" }, "Delete all")));
     d.open = histOpen.has(pid);
     d.ontoggle = () => d.open ? histOpen.add(pid) : histOpen.delete(pid);
     for (const e of es) {
@@ -690,6 +692,11 @@ $("#doc").addEventListener("click", ev => {
   if (act === "comment" || act === "note") openComposer(card, "", first(p), act);
   if (act === "hide") run(card, () => view([p], false));
   if (act === "dismiss") run(card, () => post({ type: "dismiss", to: ev.target.dataset.id, passage: p.id, file: p.file, line: p.start }));
+  if (act === "clear") {   // a button inside History's summary, so the summary does not toggle
+    const ids = ev.target.dataset.ids.split(" "), n = `${ids.length} exchange${ids.length > 1 ? "s" : ""}`;
+    if (confirm(`Delete all ${n} of this passage's history? Claude no longer gets them with the block history.`))
+      run(card, async () => { for (const to of ids) await post({ type: "delete", to, passage: p.id, file: p.file, line: p.start }); });
+  }
   if (act === "cancel" || act === "delete" && confirm("Delete this exchange from the passage's history? Claude no longer gets it with the block history.")
       || act === "unnote" && confirm("Delete this note?"))
     run(card, () => post({ type: "delete", to: ev.target.dataset.id, passage: p.id, file: p.file, line: p.start }));
