@@ -138,6 +138,21 @@ class Commits(Case):
         self.approve(rv, self.changed(rv)[0])
         self.assertEqual(self.head(rv), "Alpha one, edited.\n\nBeta two.")
 
+    def test_commit_after_a_hand_commit_keeps_its_blank_lines(self):
+        """HEAD holds a commit made by hand, so it is not the base with some
+        parts made: each part still commits the lines it shows, blank lines
+        included."""
+        rv = self.make("Old para one.\n\nEnd para.\n",
+                       "New line one.\nNew line two.\n\nAnother new.\n\nOld para one.\n\nEnd para fixed twice.\n",
+                       head="Old para one.\n\nEnd para fixed.\n")
+        rv.append({"type": "split", "passage": self.changed(rv)[0]["id"], "file": "f.tex", "line": 2, "text": "New line two."})
+        one, two = self.changed(rv)[:2]
+        self.assertIn("sha", self.approve(rv, one))
+        self.assertEqual(self.head(rv), "New line one.\nOld para one.\n\nEnd para fixed.\n")
+        self.assertIn("sha", self.approve(rv, two))
+        self.assertEqual(self.head(rv), "New line one.\nNew line two.\n\nOld para one.\n\nEnd para fixed.\n")
+        self.assertEqual([p["dirty"] for p in self.changed(rv)], [False, False, True, True])
+
     def test_commit_one_of_consecutive_deleted_paragraphs(self):
         base = "Keep A.\n\nDrop B.\n\nDrop C.\n\nKeep D.\n"
         rv = self.make(base, "Keep A.\n\nKeep D.\n")

@@ -462,30 +462,59 @@ def rebase(head, base, work, ps):
         at, o, n = nxt, oa + len(a), na + len(b)
 
 
+def onto(path, head, work, raw):
+    """The changes from head that make the parts raw (of a diff to work), when
+    head is not base with some of them made: the diff from head to work cut
+    where the parts start in work, so a part takes the changes in its stretch
+    of work, blank lines as it shows them; a removed paragraph goes with the
+    part removing the same one. Returns ours (keyed as their parts), extra
+    (removals no part shows) and put ({index in raw: the diff from head of a
+    part the base diff leaves unchanged})."""
+    starts, gone = [q["at"] for q in raw], {tuple(q["key"]): i for i, q in enumerate(raw) if q["par"] is None}
+    mine, ours, extra, put = [[] for _ in raw], [], [], {}
+    for u in passages(path, head, work):
+        i = gone.get(tuple(u["key"]))
+        if not raw or u["par"] is None and i is None:
+            if u["kind"] == "changed":
+                extra.append(u)
+                ours.append(u)
+            continue
+        if i is not None:
+            mine[i].append((u["old_at"], u["segs"]))
+            continue
+        k, o = max(bisect.bisect_right(starts, u["at"]) - 1, 0), u["old_at"]
+        for segs in pieces(u["segs"], [s - u["at"] for s in starts if u["at"] < s < u["at"] + len(new_of(u["segs"]))]):
+            mine[k].append((o, segs))
+            o, k = o + len(old_of(segs)), k + 1
+    for i, got in enumerate(mine):
+        for o, segs in got:
+            if any(op != "=" for op, _ in segs):
+                ours.append({"key": raw[i]["key"], "kind": "changed", "segs": segs, "old_at": o})
+        if raw[i]["kind"] != "changed" and any(u["key"] == raw[i]["key"] for u in ours):
+            segs, end = [], got[0][0]
+            for o, s in got:   # the unchanged text between pieces, as head has it
+                segs += ([["=", head[end:o]]] if o > end else []) + [list(x) for x in s if x[1]]
+                end = o + len(old_of(s))
+            pid = hashlib.sha1(f"{path}\0{old_of(segs)}\0{new_of(segs)}".encode()).hexdigest()[:12]
+            put[i] = {**raw[i], "id": pid, "kind": "changed", "segs": segs, "old_at": got[0][0]}
+    return ours, extra, put
+
+
 def view(path, base, head, work, splits=(), records=(), edits=None):
     """A file's passages as the page shows them, and the changes from head that
     commits make. The page shows the diff from base cut at the reviewer's
     splits, each passage against its approved text (records), each hunk with
     the edit that made it (edits: {(old, new): edit id}, by the passage's hunk
     it is in) and "dirty" when its lines differ from head. Commits make the
-    shown passages not in head yet when head is base with some made, else the
-    diff from head cut the same way; then a change from head the base diff
-    does not show (a committed change reverted) shows as a passage of its own."""
+    shown passages not in head yet when head is base with some made, else
+    onto(); then a change from head the base diff does not show (a committed
+    change reverted) shows as a passage of its own."""
     ps = passages(path, base, work)
     cmap = cuts(ps, splits)
     raw = split(path, copy.deepcopy(ps), cmap)
     ours, extra, put = rebase(head, base, work, raw), [], {}
     if ours is None:
-        ours = split(path, passages(path, head, work), cmap)
-        where = {tuple(q["key"]): i for i, q in enumerate(raw)}
-        for u in ours:
-            i = where.get(tuple(u["key"]))
-            if u["kind"] != "changed":
-                continue
-            if i is None:
-                extra.append(dict(u))
-            elif raw[i]["kind"] != "changed":
-                put[i] = dict(u)
+        ours, extra, put = onto(path, head, work, raw)
     approvals([p for p in ps if p["kind"] == "changed"] + extra + list(put.values()), records, cmap)
     shown = split(path, ps, cmap)
     for i, u in put.items():
